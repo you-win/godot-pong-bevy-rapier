@@ -1,0 +1,53 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=4
+
+_global_script_classes=[ {
+"base": "Reference",
+"class": "BaseLoader",
+"language": "GDScript",
+"path": "res://utils/loaders/base_loader.gd"
+}, {
+"base": "Object",
+"class": "FSM",
+"language": "GDScript",
+"path": "res://utils/fsm/fsm.gd"
+}, {
+"base": "Object",
+"class": "FSMState",
+"language": "GDScript",
+"path": "res://utils/fsm/fsm_state.gd"
+}, {
+"base": "Reference",
+"class": "Logger",
+"language": "GDScript",
+"path": "res://utils/logger.gd"
+}, {
+"base": "Reference",
+"class": "SignalBroadcaster",
+"language": "GDScript",
+"path": "res://utils/signal_broadcaster.gd"
+} ]
+_global_script_class_icons={
+"BaseLoader": "",
+"FSM": "",
+"FSMState": "",
+"Logger": "",
+"SignalBroadcaster": ""
+}
+
+[application]
+
+run/main_scene="res://screens/game.tscn"
+
+[physics]
+
+2d/physics_engine="GodotPhysics"
+2d/default_gravity=0
+2d/default_gravity_vector=Vector2( 0, 0 )
