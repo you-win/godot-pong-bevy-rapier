@@ -4,6 +4,7 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::RunOnce;
 use gdnative::api::{GlobalConstants, ImageTexture, ProjectSettings, StreamTexture, VisualServer};
 use gdnative::prelude::*;
+use rapier2d::prelude::*;
 
 #[derive(Default)]
 struct Delta(f32);
@@ -14,7 +15,7 @@ struct Drawable {
     transform: Transform2D,
 }
 
-const PADDLE_SPEED: f32 = 100.0;
+const PADDLE_SPEED: f32 = 500.0;
 
 #[derive(Component)]
 enum Paddle {
@@ -77,23 +78,6 @@ impl EcsFactory {
     #[export]
     fn new_ecs(&self, _o: &Reference) -> Instance<Ecs, Unique> {
         Ecs::new().emplace()
-    }
-
-    // TODO remove later
-    #[export]
-    fn new_rust_sprite(&self, _o: &Reference) -> Instance<RustSprite, Unique> {
-        let image = ResourceLoader::godot_singleton()
-            .load("res://assets/icon.png", "StreamTexture", false)
-            .and_then(|res| res.cast::<StreamTexture>())
-            .unwrap();
-
-        let image = unsafe { image.assume_safe() };
-
-        // let img = Image::new();
-        // img.create_from_data(64, 64, false, 4, image.get_data());
-        // let image = image.cast::<Image>().unwrap();
-
-        RustSprite::new(image.get_data().unwrap()).emplace()
     }
 }
 
@@ -162,61 +146,9 @@ impl Ecs {
         let paddle_image = paddle_image.into_shared();
         let paddle_image = unsafe { paddle_image.assume_safe() };
 
-        let left_paddle_rid = vis_server.canvas_item_create();
-        let left_paddle_texture_rid = vis_server.texture_create_from_image(paddle_image, 7);
-        let left_transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, -300.0, 0.0);
-        vis_server.canvas_item_add_texture_rect(
-            left_paddle_rid,
-            Rect2::new(
-                Point2::new(
-                    -(paddle_image.get_height() / 2) as f32,
-                    paddle_image.get_width() as f32,
-                ),
-                Size2::new(64.0, 256.0),
-            ),
-            left_paddle_texture_rid,
-            false,
-            Color::rgba(1.0, 1.0, 1.0, 1.0),
-            false,
-            dummy_rid,
-        );
-        vis_server.canvas_item_set_parent(left_paddle_rid, o.get_canvas_item());
-        vis_server.canvas_item_set_transform(left_paddle_rid, left_transform);
-        self.world
-            .spawn()
-            .insert(Drawable {
-                rid: left_paddle_rid,
-                transform: left_transform,
-            })
-            .insert(Paddle::Left);
+        create_paddle(Paddle::Left, o, &mut self.world, vis_server, paddle_image);
 
-        let right_paddle_rid = vis_server.canvas_item_create();
-        let right_paddle_texture_rid = vis_server.texture_create_from_image(paddle_image, 7);
-        let right_transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, 300.0, 0.0);
-        vis_server.canvas_item_add_texture_rect(
-            right_paddle_rid,
-            Rect2::new(
-                Point2::new(
-                    (paddle_image.get_height() / 2) as f32,
-                    paddle_image.get_width() as f32,
-                ),
-                Size2::new(64.0, 256.0),
-            ),
-            right_paddle_texture_rid,
-            false,
-            Color::rgba(1.0, 1.0, 1.0, 1.0),
-            false,
-            dummy_rid,
-        );
-        vis_server.canvas_item_set_parent(right_paddle_rid, o.get_canvas_item());
-        vis_server.canvas_item_set_transform(right_paddle_rid, right_transform);
-        self.world
-            .spawn()
-            .insert(Drawable {
-                rid: right_paddle_rid,
-                transform: right_transform,
-            })
-            .insert(Paddle::Right);
+        create_paddle(Paddle::Right, o, &mut self.world, vis_server, paddle_image);
 
         self.textures.push(paddle_image.claim());
     }
@@ -248,6 +180,8 @@ impl Ecs {
         self.schedule.run(&mut self.world);
     }
 }
+
+//region Systems
 
 fn hello_world() {
     godot_print!("hello world");
@@ -292,65 +226,63 @@ fn paddle_system(
     }
 }
 
-fn input_system() {}
-
 fn collision_system() {}
 
 fn render_system() {}
 
-// TODO remove later
-#[derive(NativeClass)]
-#[no_constructor]
-#[inherit(Node2D)]
-pub struct RustSprite {
-    image: Ref<Image, Shared>,
-    rid: Option<Rid>,
-    transform: Transform2D,
-}
+//endregion
 
-#[methods]
-impl RustSprite {
-    fn new(image: Ref<Image, Shared>) -> Self {
-        Self {
-            image,
-            rid: None,
-            transform: Transform2D::new(1.0, 0.0, 0.0, 1.0, -100.0, 0.0),
+fn create_paddle(
+    paddle: Paddle,
+    o: &Node2D,
+    world: &mut World,
+    vis_server: &VisualServer,
+    paddle_image: TRef<Image>,
+) {
+    let paddle_rid = vis_server.canvas_item_create();
+    let paddle_texture_rid = vis_server.texture_create_from_image(paddle_image, 7);
+
+    let mut transform: Transform2D;
+    match paddle {
+        Paddle::Left => {
+            transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, -500.0, 0.0);
+        }
+        Paddle::Right => {
+            transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, 500.0, 0.0);
         }
     }
 
-    #[export]
-    fn _ready(&mut self, owner: &Node2D) {
-        let image = unsafe { self.image.assume_safe() };
+    let paddle_w = paddle_image.get_width();
+    let paddle_h = paddle_image.get_height();
 
-        let vis_server = unsafe { VisualServer::godot_singleton() };
-        let rid = vis_server.canvas_item_create();
-        let tex_rid = vis_server.texture_create_from_image(image, 7);
-        vis_server.canvas_item_set_parent(rid, owner.get_canvas_item());
-        vis_server.canvas_item_add_texture_rect(
-            rid,
-            Rect2::new(Point2::new(0.0, 0.0), Size2::new(64.0, 64.0)),
-            tex_rid,
-            false,
-            Color::rgba(1.0, 1.0, 1.0, 1.0),
-            false,
-            Rid::new(),
-        );
-        self.rid = Some(rid);
-    }
+    transform.m31 -= paddle_w as f32;
+    transform.m32 -= paddle_h as f32;
 
-    #[export]
-    fn _process(&mut self, _o: &Node2D, delta: f32) {
-        let vis_server = unsafe { VisualServer::godot_singleton() };
-
-        let input_handler = Input::godot_singleton();
-        if input_handler.is_key_pressed(GlobalConstants::KEY_W) {
-            self.transform.m32 -= 10.0 * delta;
-            vis_server.canvas_item_set_transform(self.rid.unwrap(), self.transform);
-            godot_print!("{:?}", self.transform);
-        }
-        if input_handler.is_key_pressed(GlobalConstants::KEY_S) {
-            self.transform.m32 += 10.0 * delta;
-            vis_server.canvas_item_set_transform(self.rid.unwrap(), self.transform);
-        }
-    }
+    vis_server.canvas_item_add_texture_rect(
+        paddle_rid,
+        Rect2::new(
+            Point2::new(
+                (paddle_image.get_width() / 2) as f32,
+                (paddle_image.get_height() / 2) as f32,
+            ),
+            Size2::new(
+                paddle_image.get_width() as f32,
+                paddle_image.get_height() as f32,
+            ),
+        ),
+        paddle_texture_rid,
+        false,
+        Color::rgba(1.0, 1.0, 1.0, 1.0),
+        false,
+        Rid::new(),
+    );
+    vis_server.canvas_item_set_parent(paddle_rid, o.get_canvas_item());
+    vis_server.canvas_item_set_transform(paddle_rid, transform);
+    world
+        .spawn()
+        .insert(Drawable {
+            rid: paddle_rid,
+            transform: transform,
+        })
+        .insert(paddle);
 }
