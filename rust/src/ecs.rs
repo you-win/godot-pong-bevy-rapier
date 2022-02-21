@@ -79,6 +79,7 @@ impl EcsFactory {
         Ecs::new().emplace()
     }
 
+    // TODO remove later
     #[export]
     fn new_rust_sprite(&self, _o: &Reference) -> Instance<RustSprite, Unique> {
         let image = ResourceLoader::godot_singleton()
@@ -163,7 +164,7 @@ impl Ecs {
 
         let left_paddle_rid = vis_server.canvas_item_create();
         let left_paddle_texture_rid = vis_server.texture_create_from_image(paddle_image, 7);
-        let left_transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, 500.0, 0.0);
+        let left_transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, -300.0, 0.0);
         vis_server.canvas_item_add_texture_rect(
             left_paddle_rid,
             Rect2::new(
@@ -180,7 +181,7 @@ impl Ecs {
             dummy_rid,
         );
         vis_server.canvas_item_set_parent(left_paddle_rid, o.get_canvas_item());
-        // vis_server.canvas_item_set_transform(left_paddle_rid, left_transform);
+        vis_server.canvas_item_set_transform(left_paddle_rid, left_transform);
         self.world
             .spawn()
             .insert(Drawable {
@@ -191,7 +192,7 @@ impl Ecs {
 
         let right_paddle_rid = vis_server.canvas_item_create();
         let right_paddle_texture_rid = vis_server.texture_create_from_image(paddle_image, 7);
-        let right_transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, -500.0, 0.0);
+        let right_transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, 300.0, 0.0);
         vis_server.canvas_item_add_texture_rect(
             right_paddle_rid,
             Rect2::new(
@@ -279,7 +280,6 @@ fn paddle_system(
                 }
                 d.transform.m32 += left_movement * delta.0;
                 vis_server.canvas_item_set_transform(d.rid, d.transform);
-                godot_print!("moving left {:?}", d.transform);
             }
             Paddle::Right => {
                 if right_movement.abs() == 0.0 {
@@ -298,6 +298,7 @@ fn collision_system() {}
 
 fn render_system() {}
 
+// TODO remove later
 #[derive(NativeClass)]
 #[no_constructor]
 #[inherit(Node2D)]
