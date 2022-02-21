@@ -45,6 +45,11 @@ func _ready() -> void:
 #		tran.origin.y += 10.0
 #		VisualServer.canvas_item_set_transform(rid, tran)
 
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey:
+		if event.scancode == KEY_SPACE and event.pressed:
+			get_tree().reload_current_scene()
+
 ###############################################################################
 # Connections                                                                 #
 ###############################################################################

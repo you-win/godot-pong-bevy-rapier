@@ -4,7 +4,9 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::RunOnce;
 use gdnative::api::{GlobalConstants, ImageTexture, ProjectSettings, StreamTexture, VisualServer};
 use gdnative::prelude::*;
-use rapier2d::prelude::*;
+use rapier2d::prelude::{
+    nalgebra, vector, ActiveCollisionTypes, ActiveEvents, ColliderBuilder, InteractionGroups,
+};
 
 #[derive(Default)]
 struct Delta(f32);
@@ -15,6 +17,11 @@ struct Drawable {
     transform: Transform2D,
 }
 
+#[derive(Component)]
+struct Collider {
+    collider: rapier2d::prelude::Collider,
+}
+
 const PADDLE_SPEED: f32 = 500.0;
 
 #[derive(Component)]
@@ -22,6 +29,12 @@ enum Paddle {
     Left,
     Right,
 }
+
+#[derive(Component)]
+struct Ball;
+
+#[derive(Component)]
+struct Velocity(Vector2);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 enum GodotInput {
@@ -89,6 +102,7 @@ pub struct Ecs {
     world: World,
 
     textures: Vec<Ref<Image>>,
+    rids: Vec<Rid>,
 }
 
 #[methods]
@@ -98,6 +112,7 @@ impl Ecs {
             schedule: Schedule::default(),
             world: World::default(),
             textures: Vec::new(),
+            rids: Vec::new(),
         };
 
         ecs.world.insert_resource(InputQueue::new());
@@ -120,10 +135,8 @@ impl Ecs {
             .stage(Stages::Startup, |schedule: &mut Schedule| {
                 return schedule.add_system_to_stage(Stages::Startup, hello_world);
             })
-            // .stage(Stages::Startup, |schedule: &mut Schedule| {
-            //     return schedule.add_system_to_stage(Stages::Startup, spawn_system);
-            // })
             .add_system_to_stage(Stages::Preupdate, paddle_system)
+            .add_system_to_stage(Stages::Preupdate, ball_system)
             //
             .add_system_to_stage(Stages::Update, collision_system)
             //
@@ -137,8 +150,6 @@ impl Ecs {
         let vis_server = unsafe { VisualServer::godot_singleton() };
         let project_settings = ProjectSettings::godot_singleton();
 
-        let dummy_rid = Rid::new();
-
         let paddle_image = Image::new();
         paddle_image
             .load(project_settings.globalize_path("res://assets/Paddle.png"))
@@ -146,9 +157,29 @@ impl Ecs {
         let paddle_image = paddle_image.into_shared();
         let paddle_image = unsafe { paddle_image.assume_safe() };
 
-        create_paddle(Paddle::Left, o, &mut self.world, vis_server, paddle_image);
+        let (left_rid, left_texture_rid) =
+            create_paddle(Paddle::Left, o, &mut self.world, vis_server, paddle_image);
 
-        create_paddle(Paddle::Right, o, &mut self.world, vis_server, paddle_image);
+        self.rids.push(left_rid);
+        self.rids.push(left_texture_rid);
+
+        let (right_rid, right_texture_rid) =
+            create_paddle(Paddle::Right, o, &mut self.world, vis_server, paddle_image);
+
+        self.rids.push(right_rid);
+        self.rids.push(right_texture_rid);
+
+        let ball_image = Image::new();
+        ball_image
+            .load(project_settings.globalize_path("res://assets/icon.png"))
+            .expect("Unable to load ball image");
+        let ball_image = ball_image.into_shared();
+        let ball_image = unsafe { ball_image.assume_safe() };
+
+        let (ball_rid, ball_texture_rid) = create_ball(o, &mut self.world, vis_server, ball_image);
+
+        self.rids.push(ball_rid);
+        self.rids.push(ball_texture_rid);
 
         self.textures.push(paddle_image.claim());
     }
@@ -171,13 +202,18 @@ impl Ecs {
             input_queue.add(GodotInput::RightDown);
         }
 
-        if input_handler.is_key_pressed(GlobalConstants::KEY_SPACE) {
-            godot_print!("{:?}", self.textures);
-        }
-
         let mut delta_res = self.world.get_resource_mut::<Delta>().unwrap();
         delta_res.0 = delta;
         self.schedule.run(&mut self.world);
+    }
+
+    #[export]
+    fn _exit_tree(&self, _: &Node2D) {
+        let vis_server = unsafe { VisualServer::godot_singleton() };
+
+        for rid in self.rids.iter() {
+            vis_server.free_rid(*rid);
+        }
     }
 }
 
@@ -226,7 +262,22 @@ fn paddle_system(
     }
 }
 
-fn collision_system() {}
+fn ball_system(delta: Res<Delta>, mut query: Query<(&Ball, &mut Drawable, &Velocity)>) {
+    let vis_server = unsafe { VisualServer::godot_singleton() };
+
+    for (_, mut d, v) in query.iter_mut() {
+        d.transform.m31 += v.0.x * delta.0;
+        d.transform.m32 += v.0.y * delta.0;
+
+        vis_server.canvas_item_set_transform(d.rid, d.transform);
+    }
+}
+
+fn collision_system(
+    delta: Res<Delta>,
+    mut query: Query<(&Collider, &mut Drawable, Option<&mut Velocity>)>,
+) {
+}
 
 fn render_system() {}
 
@@ -238,37 +289,37 @@ fn create_paddle(
     world: &mut World,
     vis_server: &VisualServer,
     paddle_image: TRef<Image>,
-) {
+) -> (Rid, Rid) {
     let paddle_rid = vis_server.canvas_item_create();
     let paddle_texture_rid = vis_server.texture_create_from_image(paddle_image, 7);
-
-    let mut transform: Transform2D;
-    match paddle {
-        Paddle::Left => {
-            transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, -500.0, 0.0);
-        }
-        Paddle::Right => {
-            transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, 500.0, 0.0);
-        }
-    }
 
     let paddle_w = paddle_image.get_width();
     let paddle_h = paddle_image.get_height();
 
-    transform.m31 -= paddle_w as f32;
-    transform.m32 -= paddle_h as f32;
+    let transform: Transform2D;
+    let mut collider = ColliderBuilder::cuboid((paddle_w / 2) as f32, (paddle_h / 2) as f32)
+        .restitution(0.7)
+        .collision_groups(InteractionGroups::new(0b0000, 0b0000))
+        .solver_groups(InteractionGroups::new(0b0000, 0b0000))
+        .active_collision_types(ActiveCollisionTypes::default())
+        .active_events(ActiveEvents::CONTACT_EVENTS | ActiveEvents::INTERSECTION_EVENTS);
+
+    match paddle {
+        Paddle::Left => {
+            transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, -500.0, 0.0);
+            collider = collider.translation(vector![-500.0 as f32, 0.0 as f32]);
+        }
+        Paddle::Right => {
+            transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, 500.0, 0.0);
+            collider = collider.translation(vector![500.0 as f32, 0.0 as f32]);
+        }
+    }
 
     vis_server.canvas_item_add_texture_rect(
         paddle_rid,
         Rect2::new(
-            Point2::new(
-                (paddle_image.get_width() / 2) as f32,
-                (paddle_image.get_height() / 2) as f32,
-            ),
-            Size2::new(
-                paddle_image.get_width() as f32,
-                paddle_image.get_height() as f32,
-            ),
+            Point2::new(-(paddle_w / 2) as f32, -(paddle_h / 2) as f32),
+            Size2::new(paddle_w as f32, paddle_h as f32),
         ),
         paddle_texture_rid,
         false,
@@ -278,11 +329,68 @@ fn create_paddle(
     );
     vis_server.canvas_item_set_parent(paddle_rid, o.get_canvas_item());
     vis_server.canvas_item_set_transform(paddle_rid, transform);
+
     world
         .spawn()
         .insert(Drawable {
             rid: paddle_rid,
             transform: transform,
         })
-        .insert(paddle);
+        .insert(paddle)
+        .insert(Collider {
+            collider: collider.build(),
+        });
+
+    (paddle_rid, paddle_texture_rid)
+}
+
+fn create_ball(
+    o: &Node2D,
+    world: &mut World,
+    vis_server: &VisualServer,
+    ball_image: TRef<Image>,
+) -> (Rid, Rid) {
+    let ball_w = ball_image.get_width();
+    let ball_h = ball_image.get_height();
+
+    let transform = Transform2D::identity();
+
+    let ball_rid = vis_server.canvas_item_create();
+    let ball_texture_rid = vis_server.texture_create_from_image(ball_image, 7);
+
+    vis_server.canvas_item_add_texture_rect(
+        ball_rid,
+        Rect2::new(
+            Point2::new(-(ball_w / 2) as f32, -(ball_h / 2) as f32),
+            Size2::new(ball_w as f32, ball_h as f32),
+        ),
+        ball_texture_rid,
+        false,
+        Color::rgba(1.0, 1.0, 1.0, 1.0),
+        false,
+        Rid::new(),
+    );
+
+    vis_server.canvas_item_set_parent(ball_rid, o.get_canvas_item());
+    vis_server.canvas_item_set_transform(ball_rid, transform);
+
+    let collider = ColliderBuilder::ball(64.0)
+        .restitution(0.7)
+        .collision_groups(InteractionGroups::new(0b0000, 0b0000))
+        .solver_groups(InteractionGroups::new(0b0000, 0b0000))
+        .active_collision_types(ActiveCollisionTypes::default())
+        .active_events(ActiveEvents::CONTACT_EVENTS | ActiveEvents::INTERSECTION_EVENTS)
+        .build();
+
+    world
+        .spawn()
+        .insert(Drawable {
+            rid: ball_rid,
+            transform: transform,
+        })
+        .insert(Ball)
+        .insert(Velocity(Vector2::new(-250.0, 0.0)))
+        .insert(Collider { collider });
+
+    (ball_rid, ball_texture_rid)
 }

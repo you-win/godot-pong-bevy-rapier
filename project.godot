@@ -52,6 +52,10 @@ _global_script_class_icons={
 
 run/main_scene="res://screens/game.tscn"
 
+[debug]
+
+settings/stdout/verbose_stdout=true
+
 [display]
 
 window/size/width=1600
