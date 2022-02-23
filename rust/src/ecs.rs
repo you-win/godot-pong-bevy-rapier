@@ -5,8 +5,12 @@ use bevy_ecs::schedule::RunOnce;
 use gdnative::api::{GlobalConstants, ImageTexture, ProjectSettings, StreamTexture, VisualServer};
 use gdnative::prelude::*;
 use rapier2d::prelude::{
-    nalgebra, vector, ActiveCollisionTypes, ActiveEvents, ColliderBuilder, InteractionGroups,
+    nalgebra, vector, ActiveCollisionTypes, ActiveEvents, CoefficientCombineRule, Collider,
+    ColliderBuilder, ColliderHandle, ColliderSet, IntegrationParameters, InteractionGroups,
+    Isometry, RigidBody, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
 };
+
+use crate::physics::RapierWorld2D;
 
 #[derive(Default)]
 struct Delta(f32);
@@ -18,8 +22,15 @@ struct Drawable {
 }
 
 #[derive(Component)]
-struct Collider {
-    collider: rapier2d::prelude::Collider,
+struct PhysicsBody {
+    body: RigidBodyHandle,
+    collider: ColliderHandle,
+}
+
+impl PhysicsBody {
+    fn new(body: RigidBodyHandle, collider: ColliderHandle) -> Self {
+        Self { body, collider }
+    }
 }
 
 const PADDLE_SPEED: f32 = 500.0;
@@ -117,6 +128,7 @@ impl Ecs {
 
         ecs.world.insert_resource(InputQueue::new());
         ecs.world.insert_resource(Delta::default());
+        // ecs.world.insert_resource(RapierWorld2D::new());
 
         // Add stages
         ecs.schedule
@@ -157,14 +169,44 @@ impl Ecs {
         let paddle_image = paddle_image.into_shared();
         let paddle_image = unsafe { paddle_image.assume_safe() };
 
-        let (left_rid, left_texture_rid) =
-            create_paddle(Paddle::Left, o, &mut self.world, vis_server, paddle_image);
+        // let physics_world = self
+        //     .world
+        //     .get_resource_mut::<RapierWorld2D>()
+        //     .expect("Unable to get physics world");
+
+        // let mut bodies = physics_world.bodies.borrow_mut();
+        // let mut bodies = physics_world.bodies.write().expect("Unable to get bodies");
+        let mut bodies = RigidBodySet::new();
+
+        // let mut colliders = physics_world.colliders.borrow_mut();
+        // let mut colliders = physics_world
+        //     .colliders
+        //     .write()
+        //     .expect("Unable to get colliders");
+        let mut colliders = ColliderSet::new();
+
+        let (left_rid, left_texture_rid) = create_paddle(
+            Paddle::Left,
+            o,
+            &mut self.world,
+            vis_server,
+            paddle_image,
+            &mut bodies,
+            &mut colliders,
+        );
 
         self.rids.push(left_rid);
         self.rids.push(left_texture_rid);
 
-        let (right_rid, right_texture_rid) =
-            create_paddle(Paddle::Right, o, &mut self.world, vis_server, paddle_image);
+        let (right_rid, right_texture_rid) = create_paddle(
+            Paddle::Right,
+            o,
+            &mut self.world,
+            vis_server,
+            paddle_image,
+            &mut bodies,
+            &mut colliders,
+        );
 
         self.rids.push(right_rid);
         self.rids.push(right_texture_rid);
@@ -176,12 +218,23 @@ impl Ecs {
         let ball_image = ball_image.into_shared();
         let ball_image = unsafe { ball_image.assume_safe() };
 
-        let (ball_rid, ball_texture_rid) = create_ball(o, &mut self.world, vis_server, ball_image);
+        let (ball_rid, ball_texture_rid) = create_ball(
+            o,
+            &mut self.world,
+            vis_server,
+            ball_image,
+            &mut bodies,
+            &mut colliders,
+        );
 
         self.rids.push(ball_rid);
         self.rids.push(ball_texture_rid);
 
         self.textures.push(paddle_image.claim());
+
+        // let physics_world = RapierWorld2D::new(bodies, colliders);
+        self.world
+            .insert_resource(RapierWorld2D::new(bodies, colliders));
     }
 
     #[export]
@@ -225,11 +278,10 @@ fn hello_world() {
 
 fn paddle_system(
     mut input_queue: ResMut<InputQueue>,
+    mut physics_world: Res<RapierWorld2D>,
     delta: Res<Delta>,
-    mut query: Query<(&Paddle, &mut Drawable)>,
+    mut query: Query<(&Paddle, &mut Drawable, &mut PhysicsBody)>,
 ) {
-    let vis_server = unsafe { VisualServer::godot_singleton() };
-
     let mut left_movement: f32 = 0.0;
     let mut right_movement: f32 = 0.0;
 
@@ -242,46 +294,168 @@ fn paddle_system(
         }
     }
 
-    for (p, mut d) in query.iter_mut() {
+    for (p, mut d, b) in query.iter_mut() {
         match p {
             Paddle::Left => {
                 if left_movement.abs() == 0.0 {
                     continue;
                 }
                 d.transform.m32 += left_movement * delta.0;
-                vis_server.canvas_item_set_transform(d.rid, d.transform);
             }
             Paddle::Right => {
                 if right_movement.abs() == 0.0 {
                     continue;
                 }
                 d.transform.m32 += right_movement * delta.0;
-                vis_server.canvas_item_set_transform(d.rid, d.transform);
             }
         }
+
+        let mut bodies = physics_world.bodies.write().expect("Unable to get body");
+        let body = bodies.get_mut(b.body).expect("No physics body found");
+        body.set_position(
+            Isometry::translation(d.transform.m31, d.transform.m32),
+            true,
+        );
     }
 }
 
-fn ball_system(delta: Res<Delta>, mut query: Query<(&Ball, &mut Drawable, &Velocity)>) {
-    let vis_server = unsafe { VisualServer::godot_singleton() };
+fn ball_system(
+    delta: Res<Delta>,
+    physics_world: Res<RapierWorld2D>,
+    mut query: Query<(&Ball, &mut Drawable, &Velocity, &mut PhysicsBody)>,
+) {
+    // let vis_server = unsafe { VisualServer::godot_singleton() };
 
-    for (_, mut d, v) in query.iter_mut() {
-        d.transform.m31 += v.0.x * delta.0;
-        d.transform.m32 += v.0.y * delta.0;
+    // for (_, mut d, v, mut b) in query.iter_mut() {
+    //     d.transform.m31 += v.0.x * delta.0;
+    //     d.transform.m32 += v.0.y * delta.0;
 
-        vis_server.canvas_item_set_transform(d.rid, d.transform);
-    }
+    //     vis_server.canvas_item_set_transform(d.rid, d.transform);
+
+    //     let mut bodies = physics_world.bodies.write().expect("Unable to get body");
+    //     let body = bodies.get_mut(b.body).expect("No physics body found");
+
+    //     body.set_position(
+    //         Isometry::translation(d.transform.m31, d.transform.m32),
+    //         true,
+    //     );
+    // }
 }
 
 fn collision_system(
     delta: Res<Delta>,
-    mut query: Query<(&Collider, &mut Drawable, Option<&mut Velocity>)>,
+    physics_world: Res<RapierWorld2D>,
+    mut query: Query<(&mut Drawable, &Ball, &PhysicsBody)>,
 ) {
+    let mut pipeline = physics_world
+        .pipeline
+        .write()
+        .expect("Unable to get pipeline");
+    let mut islands = physics_world
+        .islands
+        .write()
+        .expect("Unable to get island manager");
+    let mut broad_phase = physics_world
+        .broad_phase
+        .write()
+        .expect("Unable to get broad_phase");
+    let mut narrow_phase = physics_world
+        .narrow_phase
+        .write()
+        .expect("Unable to get narrow_phase");
+    let mut bodies = physics_world.bodies.write().expect("Unable to get bodies");
+    let mut colliders = physics_world
+        .colliders
+        .write()
+        .expect("Unable to get colliders");
+    let mut joints = physics_world.joints.write().expect("Unable to get joints");
+    let mut ccd = physics_world.ccd.write().expect("Unable to get ccd");
+
+    let gravity = vector![physics_world.gravity.x, physics_world.gravity.y];
+    let mut integration_params = IntegrationParameters::default();
+    integration_params.max_position_iterations = 1;
+    integration_params.max_linear_correction = 1.0;
+    integration_params.dt = delta.0;
+
+    pipeline.step(
+        &gravity,
+        &integration_params,
+        &mut islands,
+        &mut broad_phase,
+        &mut narrow_phase,
+        &mut bodies,
+        &mut colliders,
+        &mut joints,
+        &mut ccd,
+        &(),
+        &(),
+    );
+
+    for (mut d, _, b) in query.iter_mut() {
+        let ball = bodies
+            .get(b.body)
+            .expect("Unable to get ball after collision");
+
+        let pos = ball.position();
+
+        d.transform.m31 = pos.translation.vector.x;
+        d.transform.m32 = pos.translation.vector.y;
+    }
 }
 
-fn render_system() {}
+fn render_system(query: Query<&mut Drawable>) {
+    let vis_server = unsafe { VisualServer::godot_singleton() };
+
+    for d in query.iter() {
+        vis_server.canvas_item_set_transform(d.rid, d.transform);
+    }
+}
 
 //endregion
+
+fn create_kinematic_body(
+    width: i64,
+    height: i64,
+    transform: &Transform2D,
+    mut bodies: &mut RigidBodySet,
+    colliders: &mut ColliderSet,
+) -> PhysicsBody {
+    let body = RigidBodyBuilder::new_kinematic_position_based()
+        .translation(vector![transform.m31, transform.m32])
+        .build();
+    let body_handle = bodies.insert(body);
+
+    let collider = ColliderBuilder::cuboid((width / 2) as f32, (height / 2) as f32)
+        .friction(0.0)
+        .restitution(1.0)
+        .build();
+    let collider_handle = colliders.insert_with_parent(collider, body_handle, &mut bodies);
+
+    PhysicsBody::new(body_handle, collider_handle)
+}
+
+fn create_dynamic_body(
+    width: i64,
+    height: i64,
+    transform: &Transform2D,
+    mut bodies: &mut RigidBodySet,
+    colliders: &mut ColliderSet,
+) -> PhysicsBody {
+    let body = RigidBodyBuilder::new_dynamic()
+        .translation(vector![transform.m31, transform.m32])
+        .build();
+    let body_handle = bodies.insert(body);
+
+    let collider = ColliderBuilder::cuboid((width / 2) as f32, (height / 2) as f32)
+        .restitution(1.0)
+        .friction(0.0)
+        .restitution_combine_rule(CoefficientCombineRule::Multiply)
+        .friction_combine_rule(CoefficientCombineRule::Multiply)
+        .build();
+    let collider_handle = colliders.insert_with_parent(collider, body_handle, &mut bodies);
+
+    PhysicsBody::new(body_handle, collider_handle)
+}
 
 fn create_paddle(
     paddle: Paddle,
@@ -289,6 +463,8 @@ fn create_paddle(
     world: &mut World,
     vis_server: &VisualServer,
     paddle_image: TRef<Image>,
+    bodies: &mut RigidBodySet,
+    colliders: &mut ColliderSet,
 ) -> (Rid, Rid) {
     let paddle_rid = vis_server.canvas_item_create();
     let paddle_texture_rid = vis_server.texture_create_from_image(paddle_image, 7);
@@ -297,21 +473,13 @@ fn create_paddle(
     let paddle_h = paddle_image.get_height();
 
     let transform: Transform2D;
-    let mut collider = ColliderBuilder::cuboid((paddle_w / 2) as f32, (paddle_h / 2) as f32)
-        .restitution(0.7)
-        .collision_groups(InteractionGroups::new(0b0000, 0b0000))
-        .solver_groups(InteractionGroups::new(0b0000, 0b0000))
-        .active_collision_types(ActiveCollisionTypes::default())
-        .active_events(ActiveEvents::CONTACT_EVENTS | ActiveEvents::INTERSECTION_EVENTS);
 
     match paddle {
         Paddle::Left => {
             transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, -500.0, 0.0);
-            collider = collider.translation(vector![-500.0 as f32, 0.0 as f32]);
         }
         Paddle::Right => {
             transform = Transform2D::new(1.0, 0.0, 0.0, 1.0, 500.0, 0.0);
-            collider = collider.translation(vector![500.0 as f32, 0.0 as f32]);
         }
     }
 
@@ -337,9 +505,9 @@ fn create_paddle(
             transform: transform,
         })
         .insert(paddle)
-        .insert(Collider {
-            collider: collider.build(),
-        });
+        .insert(create_kinematic_body(
+            paddle_w, paddle_h, &transform, bodies, colliders,
+        ));
 
     (paddle_rid, paddle_texture_rid)
 }
@@ -349,6 +517,8 @@ fn create_ball(
     world: &mut World,
     vis_server: &VisualServer,
     ball_image: TRef<Image>,
+    bodies: &mut RigidBodySet,
+    colliders: &mut ColliderSet,
 ) -> (Rid, Rid) {
     let ball_w = ball_image.get_width();
     let ball_h = ball_image.get_height();
@@ -374,13 +544,11 @@ fn create_ball(
     vis_server.canvas_item_set_parent(ball_rid, o.get_canvas_item());
     vis_server.canvas_item_set_transform(ball_rid, transform);
 
-    let collider = ColliderBuilder::ball(64.0)
-        .restitution(0.7)
-        .collision_groups(InteractionGroups::new(0b0000, 0b0000))
-        .solver_groups(InteractionGroups::new(0b0000, 0b0000))
-        .active_collision_types(ActiveCollisionTypes::default())
-        .active_events(ActiveEvents::CONTACT_EVENTS | ActiveEvents::INTERSECTION_EVENTS)
-        .build();
+    let physics_body = create_dynamic_body(ball_w, ball_h, &transform, bodies, colliders);
+    bodies
+        .get_mut(physics_body.body)
+        .unwrap()
+        .apply_impulse(vector![-1000000.0, 0.0], true);
 
     world
         .spawn()
@@ -390,7 +558,7 @@ fn create_ball(
         })
         .insert(Ball)
         .insert(Velocity(Vector2::new(-250.0, 0.0)))
-        .insert(Collider { collider });
+        .insert(physics_body);
 
     (ball_rid, ball_texture_rid)
 }
