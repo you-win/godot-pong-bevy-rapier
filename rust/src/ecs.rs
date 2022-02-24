@@ -81,6 +81,18 @@ impl InputQueue {
     }
 }
 
+struct SignalQueue {
+    queue: VecDeque<String>,
+}
+
+impl SignalQueue {
+    pub fn new() -> Self {
+        let mut queue = VecDeque::new();
+        queue.make_contiguous();
+        SignalQueue { queue }
+    }
+}
+
 #[derive(Debug, Hash, PartialEq, Eq, Clone, StageLabel)]
 enum Stages {
     Startup,
@@ -127,6 +139,7 @@ impl Ecs {
         };
 
         ecs.world.insert_resource(InputQueue::new());
+        ecs.world.insert_resource(SignalQueue::new());
         ecs.world.insert_resource(Delta::default());
         // ecs.world.insert_resource(RapierWorld2D::new());
 
@@ -258,6 +271,8 @@ impl Ecs {
         let mut delta_res = self.world.get_resource_mut::<Delta>().unwrap();
         delta_res.0 = delta;
         self.schedule.run(&mut self.world);
+
+        let mut signal_queue = self.world.get_resource_mut::<SignalQueue>().unwrap();
     }
 
     #[export]

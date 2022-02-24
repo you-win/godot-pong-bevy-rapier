@@ -14,11 +14,6 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://utils/loaders/base_loader.gd"
 }, {
-"base": "",
-"class": "Ecs",
-"language": "NativeScript",
-"path": "res://rust/ecs.gdns"
-}, {
 "base": "Object",
 "class": "FSM",
 "language": "GDScript",
@@ -41,7 +36,6 @@ _global_script_classes=[ {
 } ]
 _global_script_class_icons={
 "BaseLoader": "",
-"Ecs": "",
 "FSM": "",
 "FSMState": "",
 "Logger": "",
